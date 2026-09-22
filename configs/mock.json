@@ -1,0 +1,7 @@
+{
+  "profile": "mock",
+  "model": "scripted-fixture-v1",
+  "max_output_tokens": 1024,
+  "timeout_seconds": 30,
+  "max_model_calls": 14
+}

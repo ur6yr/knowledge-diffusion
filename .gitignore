@@ -1,0 +1,38 @@
+# Local environments, generated outputs, and secrets
+.venv/
+.conda/
+__pycache__/
+.pytest_cache/
+*.egg-info/
+.DS_Store
+.env
+.env.*
+!.env.example
+.runtime/
+artifacts/
+*.pyc
+build/
+dist/
+slurm-*.out
+
+# Codex workspace instructions and handoff packet (keep locally)
+.codex/
+.agents/
+AGENTS.md
+CODEX_*.md
+/Codex_Knowledge_Diffusion_Reproduction.zip
+/SPEC.md
+/PLAN.md
+/PAPER_MAP.md
+/ACCEPTANCE_TESTS.md
+
+# Local audit/session records and supplied research reference packet
+/docs/ENVIRONMENT_AUDIT.md
+/docs/PAPER_REVIEW.md
+/docs/REQUIREMENTS.md
+/docs/SESSION_*.md
+/docs/SOURCE_INVENTORY.json
+/docs/TECHNICAL_CHECKS.md
+/papers/
+
+# src/kdiff/prompts/ contains required application prompts; keep it versioned.
