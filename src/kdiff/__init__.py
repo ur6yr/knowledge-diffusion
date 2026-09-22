@@ -1,3 +1,3 @@
-"""Scientific graph reproduction: M1 bounded development slice."""
+"""Bounded scientific graph construction, temporal analysis and witness replay."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

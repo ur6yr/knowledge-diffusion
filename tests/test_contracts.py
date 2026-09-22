@@ -150,5 +150,5 @@ def test_provider_never_falls_back_or_silently_mocks(monkeypatch):
     profile = Provider(profile="openai", model="test-no-execution")
     with pytest.raises(ValueError, match="not configured"):
         client_factory(profile)
-    with pytest.raises(NotImplementedError, match="blocked"):
+    with pytest.raises(ValueError, match="authorization"):
         require_execution_support(profile)

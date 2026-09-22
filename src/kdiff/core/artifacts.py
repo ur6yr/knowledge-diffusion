@@ -63,14 +63,24 @@ class ArtifactStore:
 
     def capture(self, data: bytes) -> dict:
         sha = self.put_bytes(data)
-        # Capture metadata is stable across retries; access under application lock.
+        # Publish capture metadata atomically across concurrent producers.
         metadata = self.root / f"capture-{sha}.json"
         if metadata.exists():
             return json.loads(metadata.read_text())
         value = {"sha256": sha, "retrieved_at": now(), "bytes": len(data)}
-        with metadata.open("x") as f:
-            json.dump(value, f, sort_keys=True)
-        return value
+        fd, temporary = tempfile.mkstemp(dir=self.root)
+        try:
+            with os.fdopen(fd, 'w') as stream:
+                json.dump(value, stream, sort_keys=True)
+                stream.flush()
+                os.fsync(stream.fileno())
+            try:
+                os.link(temporary, metadata)
+            except FileExistsError:
+                pass
+        finally:
+            os.unlink(temporary)
+        return json.loads(metadata.read_text())
 
 
 @contextmanager

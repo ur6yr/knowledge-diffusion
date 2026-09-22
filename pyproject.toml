@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kdiff-reproduction"
-version = "0.1.0"
+version = "0.2.0"
 description = "Bounded AutoGen and Neo4j temporal scientific graph reproduction"
 requires-python = ">=3.11,<3.14"
 dependencies = [
@@ -14,6 +14,11 @@ dependencies = [
   "neo4j==6.1.0",
   "pydantic==2.13.5",
   "openai==3.17.0",
+  "psycopg[binary]==3.3.6",
+  "redis==8.1.0",
+  "ijson==3.5.1",
+  "defusedxml==0.7.1",
+  "openpyxl==3.1.5",
 ]
 
 [project.optional-dependencies]

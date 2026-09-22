@@ -12,9 +12,10 @@ ROOT = Path(__file__).resolve().parents[1]
 FILES = (
     "README.md", "pyproject.toml", "requirements-lock.txt",
     "configs/mock.json", "configs/local-dev.example.json", "configs/openai.example.json",
-    "deploy/local/run.py", "deploy/rivanna/pilot.sbatch",
-    "scripts/m1_smoke.py", "scripts/package_project.py",
-    "docs/DECISIONS.md", "docs/M1_USAGE.md", "docs/SOURCES.md",
+    "configs/job.fixture.json",
+    "deploy/local/run.py", "deploy/rivanna/pilot.sbatch", "deploy/rivanna/run.sbatch",
+    "scripts/m1_smoke.py", "scripts/package_project.py", "scripts/run_job.py", "scripts/check_recovery.py",
+    "docs/DECISIONS.md", "docs/M1_USAGE.md", "docs/SOURCES.md", "docs/USAGE.md", "docs/STATUS.md", "docs/EVALUATION.md",
     "tests/fixtures/README.md", "tests/fixtures/m1_openalex.jsonl",
 )
 PATTERNS = ("src/kdiff/**/*.py", "src/kdiff/prompts/*/*.txt", "tests/test_*.py", "tests/conftest.py")

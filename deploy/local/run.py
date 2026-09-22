@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import secrets
+import signal
 import shutil
 import socket
 import subprocess
@@ -20,8 +21,15 @@ def main():
     p.add_argument("--java-home", type=Path, required=True)
     p.add_argument("--root", type=Path, required=True, help="New development directory; existing directories refused")
     p.add_argument("--bolt-port", type=int, default=17687)
+    p.add_argument('--command-timeout', type=int, default=600)
+    p.add_argument('--restore', help='Verified logical release ID from --store, restored into a new store')
+    p.add_argument('--store', type=Path, default=Path('artifacts/store'))
+    p.add_argument('--postgres-artifacts', action='store_true')
+    p.add_argument('--checkpoint-namespace', help='Freeze this namespace after the application stops')
     p.add_argument("command", nargs=argparse.REMAINDER)
     args = p.parse_args()
+    if not 1 <= args.command_timeout <= 86400:
+        p.error('Command timeout must be between 1 second and 24 hours')
     if args.bolt_port in {7687, 7688, 7689} or not 1024 < args.bolt_port < 65536:
         p.error("Choose a non-default development port")
     if not args.command:
@@ -71,20 +79,33 @@ def main():
         return initialized.returncode
     manifest = {"purpose": "kdiff-m1-development", "root": str(root), "owner_id": str(uuid4()),
                 "uri": f"bolt://127.0.0.1:{args.bolt_port}", "generation": str(uuid4()),
-                "hostname": socket.gethostname(), "status": "starting"}
+                "hostname": socket.gethostname(), "status": "starting",
+                'job_id': os.environ.get('SLURM_JOB_ID'),
+                'expires_at': time.time() + args.command_timeout + 180}
     service_path = root / "service.json"
-    service_path.write_text(json.dumps(manifest, indent=2))
+    from kdiff.deployment.manifest import atomic_json
+    atomic_json(service_path, manifest)
     from kdiff.core.graph import Graph
     log = (root / "logs/console.log").open("w")
     child = subprocess.Popen([str(home / "bin/neo4j"), "console"], env=env, stdout=log, stderr=subprocess.STDOUT)
     graph = None
+    application = None
+    interrupted_at = None
+    def stop_application(signum, frame):
+        nonlocal interrupted_at
+        interrupted_at = interrupted_at or time.monotonic()
+        if application and application.poll() is None:
+            os.killpg(application.pid, signal.SIGTERM)
+    previous = {sig: signal.signal(sig, stop_application) for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGUSR1)}
     try:
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
+            if interrupted_at:
+                raise RuntimeError('Startup interrupted')
             if child.poll() is not None:
                 raise RuntimeError(f"Owned Neo4j exited; inspect {root / 'logs/console.log'}")
             try:
-                graph = Graph(service_path)
+                graph = Graph(service_path, starting=True)
                 graph.driver.verify_connectivity()
                 break
             except Exception:
@@ -96,14 +117,45 @@ def main():
             raise RuntimeError("Owned Neo4j readiness timed out")
         graph.initialize_empty()
         graph.verify_owner()
+        from kdiff.core.artifacts import ArtifactStore, exclusive_lock
+        from kdiff.analysis.witness import load_release, freeze
+        if args.postgres_artifacts:
+            from kdiff.core.durable import PostgresArtifacts
+            store = PostgresArtifacts()
+        else:
+            store = ArtifactStore(args.store)
+        if args.restore:
+            graph.restore_empty(load_release(store, args.restore))
         version = graph.read("CALL dbms.components() YIELD name, versions, edition RETURN name, versions, edition")
         manifest.update(status="ready", pid=child.pid, components=version)
-        service_path.write_text(json.dumps(manifest, indent=2))
+        atomic_json(service_path, manifest)
         command = args.command[1:] if args.command[0] == "--" else args.command
         print(f"Owned Neo4j ready: {service_path}", flush=True)
-        result = subprocess.run(command, env={**env, "KDIFF_SERVICE": str(service_path)}, timeout=600)
-        return result.returncode
+        application = subprocess.Popen(command, env={**env, "KDIFF_SERVICE": str(service_path)}, start_new_session=True)
+        deadline = time.monotonic() + args.command_timeout
+        while application.poll() is None:
+            if time.monotonic() >= deadline and interrupted_at is None:
+                stop_application(signal.SIGTERM, None)
+            if interrupted_at and time.monotonic() - interrupted_at >= 15:
+                os.killpg(application.pid, signal.SIGKILL)
+            time.sleep(0.2)
+        application.wait()
+        if args.checkpoint_namespace and graph.has_namespace(args.checkpoint_namespace):
+            from kdiff.cli import code_digest
+            with exclusive_lock(root / 'application.lock'):
+                release_id = freeze(graph, store, args.checkpoint_namespace, code_digest())
+            atomic_json(root / 'checkpoint.json', {'release_id': release_id, 'store': str(args.store.resolve()),
+                'generation': manifest['generation'], 'application_exit': application.returncode,
+                'interrupted': interrupted_at is not None})
+        return 128 + signal.SIGTERM if interrupted_at else application.returncode
     finally:
+        if application and application.poll() is None:
+            os.killpg(application.pid, signal.SIGTERM)
+            try:
+                application.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                os.killpg(application.pid, signal.SIGKILL)
+                application.wait()
         if graph:
             graph.close()
         # Popen handle is our child; never search for or stop other database PIDs.
@@ -116,7 +168,9 @@ def main():
                 child.wait(timeout=10)
         log.close()
         manifest["status"] = "stopped"
-        service_path.write_text(json.dumps(manifest, indent=2))
+        atomic_json(service_path, manifest)
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
 
 
 if __name__ == "__main__":

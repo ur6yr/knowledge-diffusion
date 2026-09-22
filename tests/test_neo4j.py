@@ -159,3 +159,151 @@ def test_graph_property_drift_is_detected(graph, store):
               namespace=namespace).consume()
     with pytest.raises(ValueError, match="Graph fact"):
         answer(graph, store, release, namespace)
+
+
+def test_institute_seven_roles_real_graph_and_offline_witnesses(graph, store, monkeypatch):
+    from kdiff.analysis.fixtures import institute_fixture
+    from kdiff.analysis.requests import AnalysisRequest
+    from kdiff.analysis.workflow import analyze
+    batch, ids = institute_fixture(store, namespace='fixture:institute-integration')
+    graph.integrate(batch)
+    release = freeze(graph, store, batch.namespace, 'institute-integration')
+    request = AnalysisRequest(family='comparison', kind='Institution', identifier=ids['institution'], topic_id=ids['topic'],
+        before=Window(start='2016-01-01', end='2018-12-31', reference_date='2025-01-01'),
+        window=Window(start='2020-01-01', end='2022-12-31', reference_date='2025-01-01'), ask_causation=True)
+    result = asyncio.run(analyze(graph, store, PROFILE, True, release, request))
+    assert result['type'] == 'Answer', store.get(result['run'])
+    assert len(result['witnesses']) == 3
+    assert '2.21' in result['text']
+    assert result['refusals'][0]['label'] == 'NEI'
+    run = store.get(result['run'])
+    assert [r['stage'] for r in run['receipts']] == list(ANALYSIS_ROLES)
+    with monkeypatch.context() as context:
+        context.setattr(socket, 'socket', lambda *a, **k: (_ for _ in ()).throw(AssertionError('network replay')))
+        for wid in result['witnesses']:
+            assert replay(store, wid)['status'] == 'verified'
+    ambiguous = request.model_copy(update={'family':'count','kind':__import__('kdiff.core.schema',fromlist=['EntityType']).EntityType.AUTHOR,'identifier':None,'name':'A. Chen','ask_causation':False})
+    clarified = asyncio.run(analyze(graph, store, PROFILE, True, release, ambiguous))
+    assert clarified['type'] == 'Clarify'
+    assert len(clarified['candidates']) == 2
+    assert store.get(clarified['run'])['receipts'][0]['stage'] == 'Manager'
+    sites = request.model_copy(update={'family':'sites','before':None,'ask_causation':False,
+        'window':Window(start='2015-01-01',end='2024-12-31',reference_date='2025-01-01')})
+    answer = asyncio.run(analyze(graph, store, PROFILE, True, release, sites))
+    assert answer['type'] == 'Answer', store.get(answer['run'])
+    assert answer['claims'][0]['final']['value'] == 3
+    assert len(answer['claims'][1]['final']['value']['ids']) == 1
+
+
+def test_orcid_ror_adapters_through_five_autogen_roles(graph, store, tmp_path):
+    from kdiff.core.durable import TaskLedger
+    namespace = 'fixture:source-integration'
+    record = {'id':'https://ror.org/fixture-institute', 'names':[{'value':'Fixture Institute','types':['ror_display']}],
+              'relationships':[]}
+    path=tmp_path/'ror.json'
+    path.write_text(json.dumps(record))
+    first=asyncio.run(build(graph,store,PROFILE,True,path,namespace,source='ror',input_format='json'))
+    second=asyncio.run(build(graph,store,PROFILE,True,path,namespace,source='ror',input_format='json'))
+    assert first['counts']==second['counts']
+    assert second['reused']
+    assert [r['stage'] for r in store.get(first['run'])['receipts']]==list(CONSTRUCTION_ROLES)
+    ledger = TaskLedger(tmp_path / 'source-cache.sqlite', initialize=True)
+    cold = asyncio.run(build(graph,store,PROFILE,True,path,namespace,source='ror',input_format='json',ledger=ledger,use_cache=True))
+    warm = asyncio.run(build(graph,store,PROFILE,True,path,namespace,source='ror',input_format='json',ledger=ledger,use_cache=True))
+    assert first['cache'] is None
+    assert cold['cache']['miss'] == 1 and warm['cache']['durable'] == 1
+    assert warm['counts'] == cold['counts'] == first['counts']
+
+
+def test_real_web_extraction_and_program_replay(graph, store):
+    from kdiff.construction.web import capture_document
+    from kdiff.construction.web_workflow import build_document
+    from kdiff.analysis.requests import AnalysisRequest
+    from kdiff.analysis.workflow import analyze
+    text = 'Synthetic Ada joined Example University in 2019.'
+    document = capture_document(text.encode(), 'text/plain', 'https://example.org/fixture-cv', store)
+    extraction = {'entities': [
+        {'key': 'ada', 'kind': 'Author', 'name': 'Synthetic Ada', 'start': 0, 'end': 13},
+        {'key': 'org', 'kind': 'Institution', 'name': 'Example University', 'start': 21, 'end': 39}],
+        'facts': [{'head': 'ada', 'relation': 'affiliatedWith', 'tail': 'org', 'start': 0,
+                   'end': len(text), 'quote': text, 'date_text': '2019', 'observation_kind': 'employment'}]}
+    result = asyncio.run(build_document(graph, store, PROFILE, True, store.put(document), 'fixture:web-agent', extraction))
+    assert [r['stage'] for r in store.get(result['run'])['receipts']] == list(CONSTRUCTION_ROLES)
+    release_id = freeze(graph, store, 'fixture:web-agent', 'web-test')
+    request = AnalysisRequest(family='identity', kind='Author', name='Synthetic Ada',
+        window=Window(start='2018-01-01', end='2020-12-31', reference_date='2025-01-01'))
+    answer = asyncio.run(analyze(graph, store, PROFILE, True, release_id, request))
+    assert answer['type'] == 'Answer', store.get(answer['run'])
+    assert replay(store, answer['witnesses'][0])['status'] == 'verified'
+
+
+@pytest.mark.parametrize('workers', [1, 2, 4, 8])
+def test_coordinated_worker_graph_convergence(store, tmp_path, workers):
+    import concurrent.futures
+    import time
+    from kdiff.construction.worker import enqueue_builds, work
+    from kdiff.core.durable import TaskLedger
+    manifest = os.environ.get('KDIFF_SERVICE')
+    if not manifest:
+        pytest.skip('Real owned Neo4j required for worker convergence')
+    ledger = TaskLedger(tmp_path / 'workers.sqlite', initialize=True)
+    namespace = f'fixture:workers-{workers}'
+    base = json.loads(FIXTURE.read_text().splitlines()[0])
+    entries = []
+    for index in range(8):
+        record = {**base, 'id': f'fixture:openalex:W{index}', 'publication_year': 2018}
+        path = tmp_path / f'input-{index}.jsonl'
+        path.write_text(json.dumps(record))
+        entries.append({'input': str(path), 'namespace': namespace})
+    queued = enqueue_builds(entries + entries, store, ledger, PROFILE)
+    assert len(set(queued['tasks'])) == 8
+    started = time.monotonic()
+    def worker(index):
+        own = Graph(Path(manifest))
+        try:
+            while True:
+                report = asyncio.run(work(own, store, ledger, PROFILE, allow_mock=True))
+                if not report['tasks']:
+                    return
+        finally:
+            own.close()
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        list(pool.map(worker, range(workers)))
+    graph = Graph(Path(manifest))
+    try:
+        exported = graph.export(namespace)
+        assert all(task['state'] == 'done' for task in ledger.status())
+        authorships = [a for a in exported['assertions'] if a['relation'] == 'authorOf']
+        assert len(authorships) == 8
+        assert len({a['tail_id'] for a in authorships}) == 8
+        assert len({a['head_id'] for a in authorships}) == 1
+        elapsed = time.monotonic() - started
+        from kdiff.deployment.manifest import atomic_json
+        folder = Path('artifacts/scaling')
+        folder.mkdir(parents=True, exist_ok=True)
+        atomic_json(folder / f'workers-{workers}.json', {'synthetic': True, 'mock_inference': True,
+            'workers': workers, 'input_records': 8, 'duplicate_submissions': 8, 'wall_seconds': elapsed,
+            'aggregate_records_per_second': 8 / elapsed, 'per_worker_records_per_second': 8 / elapsed / workers,
+            'graph_entities': len(exported['entities']), 'graph_assertions': len(exported['assertions']),
+            'gpu_hours': None, 'policy': 'coordinated writer, no parallel write speedup claimed'})
+    finally:
+        graph.close()
+
+
+def test_snapshot_waits_for_server_side_writer_after_client_lock_release(graph, store):
+    import concurrent.futures
+    from kdiff.core.contracts import digest
+    namespace = 'fixture:snapshot-coordination'
+    construct(graph, store, namespace)
+    before = digest(graph.export(namespace))
+    with graph.driver.session(database='neo4j') as session:
+        transaction = session.begin_transaction()
+        graph._coordinate(transaction)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(graph.export, namespace)
+            try:
+                with pytest.raises(concurrent.futures.TimeoutError):
+                    future.result(timeout=.25)
+            finally:
+                transaction.commit()
+            assert digest(future.result(timeout=10)) == before

@@ -3,6 +3,8 @@
 .conda/
 __pycache__/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 *.egg-info/
 .DS_Store
 .env
@@ -19,7 +21,8 @@ slurm-*.out
 .codex/
 .agents/
 AGENTS.md
-CODEX_*.md
+CODEX*.md
+codex*.md
 /Codex_Knowledge_Diffusion_Reproduction.zip
 /SPEC.md
 /PLAN.md
@@ -34,5 +37,13 @@ CODEX_*.md
 /docs/SOURCE_INVENTORY.json
 /docs/TECHNICAL_CHECKS.md
 /papers/
+
+# External source data, model weights and serving images
+/data/
+/models/
+/checkpoints/
+*.sif
+*.safetensors
+configs/*.local.json
 
 # src/kdiff/prompts/ contains required application prompts; keep it versioned.

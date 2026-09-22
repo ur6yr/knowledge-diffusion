@@ -87,6 +87,9 @@ def render_count(claim, request: CountRequest):
 
 def replay(store: ArtifactStore, witness_id: str):
     witness = store.get(witness_id)
+    if witness.get('kind') in {'temporal-program-witness-v1', 'temporal-program-witness-v2'}:
+        from kdiff.analysis.general_witness import replay_program
+        return replay_program(store, witness_id)
     if witness["kind"] != "aggregate_bundle" or witness["replay_version"] != REPLAY_VERSION:
         raise ValueError("Unsupported witness format")
     program = CountProgram.model_validate(witness["program"])

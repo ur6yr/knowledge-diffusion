@@ -9,10 +9,18 @@ from kdiff.construction.openalex import capture_local, parse_capture, validate_b
 from kdiff.core.contracts import Batch, CountRequest, Label, digest
 
 
-async def build(graph, store, profile, allow_mock, path: Path, namespace: str):
+async def build(graph, store, profile, allow_mock, path: Path, namespace: str,
+                source='openalex', input_format='jsonl', columns=None, ledger=None, integration_lease=None,
+                use_cache=False, extraction_cache=None):
     if profile.profile == "mock" and not namespace.startswith("fixture:"):
         raise ValueError("Mock build is restricted to an explicit fixture namespace")
     run = AgentRun(store, profile, allow_mock, namespace)
+    cache = None
+    if use_cache:
+        if ledger is None:
+            raise ValueError('Extraction caching requires a durable task ledger')
+        from kdiff.core.cache import ExtractionCache
+        cache = extraction_cache or ExtractionCache(store, ledger)
 
     def scope_source(source_path: str, source_namespace: str) -> dict:
         """Approve the exact bounded local file and namespace, without expansion."""
@@ -21,30 +29,79 @@ async def build(graph, store, profile, allow_mock, path: Path, namespace: str):
         return {"source_path": source_path, "namespace": namespace, "max_records": 1000, "max_bytes": 16777216}
 
     def ingest_source(scope_id: str) -> dict:
-        """Capture a scoped native OpenAlex JSONL file as immutable raw artifacts."""
+        """Capture the scoped native source file as immutable raw artifacts."""
         scope = store.get(scope_id)
         if scope != expected_scope:
             raise ValueError("Unknown source scope")
-        return capture_local(path, store, namespace)
+        if source == 'openalex':
+            return capture_local(path, store, namespace)
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 16777216:
+            raise ValueError('Source unavailable or input budget exceeded')
+        return {**store.capture(path.read_bytes()), 'namespace': namespace, 'source': source,
+                'format': input_format, 'suffix': '.gz' if path.suffix == '.gz' else ''}
 
     def extract_records(capture_id: str) -> dict:
         """Parse structured records and retain JSON paths and source hashes."""
         if capture_id != expected_capture:
             raise ValueError("Unknown capture handle")
-        return parse_capture(store.get(capture_id), store).model_dump(mode="json")
+        capture = store.get(capture_id)
+        from kdiff.core.cache import extraction_key
+        from kdiff.core.schema import SCHEMA_VERSION, IDENTITY_VERSION
+        prompt = Path(__file__).parent / 'prompts/construction/Extraction.txt'
+        from kdiff.cli import code_digest
+        key = extraction_key(raw_hash=digest(capture), parser=digest([source, input_format, columns, code_digest()]),
+            prompt_hash=digest(prompt.read_text()), model_revision=profile.runtime_revision or profile.model,
+            schema_version=SCHEMA_VERSION, identity_version=IDENTITY_VERSION)
+        cached = cache.get(key) if cache else None
+        if cached is not None:
+            validate_batch(Batch.model_validate(cached))
+            return cached
+        if source == 'openalex':
+            result = parse_capture(capture, store).model_dump(mode="json")
+            return cache.put(key, result) if cache else result
+        import tempfile
+        from kdiff.construction.sources import parse_source
+        with tempfile.TemporaryDirectory(prefix='kdiff-captured-source-') as directory:
+            saved = Path(directory) / ('source' + capture['suffix'])
+            saved.write_bytes(store.get_bytes(capture['sha256']))
+            parsed, report = parse_source(saved, store, namespace, source, format=input_format, columns=columns)
+            store.put(report)
+            result = parsed.model_dump(mode='json')
+            return cache.put(key, result) if cache else result
 
     def resolve_source_ids(batch_id: str) -> dict:
         """Validate exact source-ID mappings; never merge people on names."""
         if batch_id != expected_batch:
             raise ValueError("Unknown batch handle")
         batch = validate_batch(Batch.model_validate(store.get(batch_id)))
+        from kdiff.construction.resolution import resolve_identifiers
+        existing = graph.export(namespace) if graph.has_namespace(namespace) else {}
+        batch, decisions = resolve_identifiers(batch, existing)
+        store.put({'kind': 'resolution_decisions', 'decisions': decisions})
         return batch.model_dump(mode="json")
 
     def integrate_records(batch_id: str) -> dict:
         """Write the validated batch using the coordinated Neo4j writer."""
         if batch_id != expected_resolved:
             raise ValueError("Unknown resolved batch handle")
-        return graph.integrate(Batch.model_validate(store.get(batch_id)))
+        batch=Batch.model_validate(store.get(batch_id))
+        if ledger is None:
+            return graph.integrate(batch)
+        if integration_lease is not None:
+            ledger.prepare(integration_lease, batch_id)
+            result = ledger.integrate(integration_lease, batch_id, lambda: graph.integrate(batch))
+            return {**result, 'task_id': integration_lease['task_id']}
+        task_id=ledger.enqueue({'kind':'graph-integration','batch_id':batch_id,
+                               'namespace':namespace,'schema':batch.schema_version})
+        prior=ledger.lookup(task_id)
+        if prior['state']=='done':
+            return {**prior['result'],'reused':True,'task_id':task_id}
+        lease=ledger.claim(run.run_id,ttl=300,task_id=task_id)
+        if lease is None:
+            raise ValueError('Integration task is leased or retry budget exhausted')
+        ledger.prepare(lease,batch_id)
+        result=ledger.integrate(lease,batch_id,lambda:graph.integrate(batch))
+        return {**result,'task_id':task_id}
 
     try:
         expected_scope = await run.turn("Orchestrator", scope_source, {"source_path": str(path), "source_namespace": namespace})
@@ -56,7 +113,7 @@ async def build(graph, store, profile, allow_mock, path: Path, namespace: str):
         resolved = await run.turn("Disambiguation", resolve_source_ids, {"batch_id": expected_batch}, [expected_batch])
         expected_resolved = store.put(resolved)
         outcome = await run.turn("Integration", integrate_records, {"batch_id": expected_resolved}, [expected_resolved])
-        return {**outcome, "run": run.save(outcome)}
+        return {**outcome, "run": run.save(outcome), 'cache': cache.hits if cache else None}
     except Exception as exc:
         run.save({"status": "failed", "error_type": type(exc).__name__})
         raise

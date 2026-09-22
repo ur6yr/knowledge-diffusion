@@ -129,6 +129,10 @@ def parse_capture(capture: dict, store: ArtifactStore) -> Batch:
             tid = entity("Topic", topic["id"], {"name": topic.get("display_name"),
                          "openAlexID": topic["id"]}, f"$.topics[{i}]")
             assertion(paper, "classifiedAs", tid, f"$.topics[{i}]", {"taxonomy": "openalex-topics"})
+        for i, reference in enumerate(record.get('referenced_works') or []):
+            check_id(reference, 'W')
+            target = entity('Paper', reference, {}, f'$.referenced_works[{i}]')
+            assertion(paper, 'citesPaper', target, f'$.referenced_works[{i}]', {'date_basis': 'citing_publication'})
 
     return Batch(namespace=namespace, entities=list(entities.values()), observations=list(observations.values()),
                  assertions=list(assertions.values()), identities=list(identities.values()), sources=list(sources.values()))
@@ -139,6 +143,16 @@ def validate_batch(batch: Batch) -> Batch:
     entities = {e.canonical_id: e for e in batch.entities}
     if len(entities) != len(batch.entities):
         raise ValueError("Duplicate canonical entity")
+    if any(e.namespace != batch.namespace for e in batch.entities):
+        raise ValueError('Entity namespace differs from its batch')
+    sources = {row['sha256'] for row in batch.sources}
+    if any(not re.fullmatch('[0-9a-f]{64}', sha) for sha in sources):
+        raise ValueError('Invalid source artifact hash')
+    for row in [*batch.observations, *batch.assertions]:
+        if row.provenance.raw_artifact_pointer not in sources:
+            raise ValueError('Graph record has no captured source operand')
+    if any(mapping.evidence_hash not in sources for mapping in batch.identities):
+        raise ValueError('Identity mapping has no source evidence')
     for a in batch.assertions:
         if a.head_id not in entities or a.tail_id not in entities:
             raise ValueError("Missing relationship endpoint")

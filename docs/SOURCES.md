@@ -1,20 +1,51 @@
-# Source inventory and adapter plan
+# Source formats and coverage
 
-No original research graph source manifest is supplied. `papers/SOURCE_MANIFEST.json` describes only the PDFs. The national OpenAlex pipeline was not run or changed.
+All graph assertions retain a source record, source version or content hash, capture time, extraction method and record path or exact text span. Missing data is never translated into a successful zero-result source status.
 
-| Source | Verified local availability | M1 implementation | Next bounded verification |
-|---|---|---|---|
-| OpenAlex | New explicitly synthetic native-shaped JSONL fixture. Sibling `kdproj/data/demo_verify` is also a synthetic demo; `data/raw` had no captured records. No national snapshot path verified. | JSONL/JSONL.gz local bounded capture, authorships, publication precision, author/institution/topic observations and exact source mappings. API, references, Parquet and expansion pending. | Inspect a supplied native snapshot sample or Parquet schema without rescan; preserve required authorship/raw columns and version metadata. |
-| ORCID | No real local records or configured public API credentials located. Sibling demo record is synthetic. | Unimplemented, `not_configured`; no empty-success fallback. | Versioned public XML/JSON fixture, sparse employment/education records, current public-client access check. |
-| ROR | No verified real registry dump located; sibling demo fixture only. | Unimplemented, `not_configured`. | Reuse a verified release with checksum, inspect versioned names/locations/relationships. |
-| USPTO | No verified local bulk XML located. | Unimplemented, `not_configured`. | Inspect packaging/version and a bounded actual NPL/inventor/assignee XML sample; retain filing/publication/grant date basis. |
-| PatCit | No verified release/index located. | Unimplemented, `not_configured`. | Check actual release columns and mappings to DOI/OpenAlex. P1 states v0.15; do not invent a lookup API. |
-| Targeted public web/CV/dissertation | No captured real source located within audited directories. | Unimplemented, network retrieval disabled. | Explicit allowlisted institutional sources; validate public DNS/IP destinations and every redirect, access restrictions, MIME and byte bounds, exact source spans. No fetched instructions executed. |
-| Ioannidis seeds | `../Knowledge Diffusion/Ionnidis Data/` contains an August 2024 archive and extracted directory. Archive size 165,625,262 bytes. Listed only; contents/checksum not yet validated. | Import pending M2. Not the August 2025 cohort cited by P3. | Inspect CSV header and release metadata, use as discovery cohort rather than identity truth. No new archive download. |
-| Grant evidence | No universal paper-specified API; no local feed verified. | Nullable schema only. | Acknowledgment IDs and explicitly configured public funder/institution evidence with sponsor/administrator roles. |
+| Source | Available reader | Preserved evidence and limits |
+|---|---|---|
+| OpenAlex | Native works JSONL or JSONL.gz | Work, author, institution and topic IDs, authorship-level institution IDs, publication dates, referenced works and JSON paths. A bibliometric affiliation is not an employment interval. |
+| ORCID | Public v3 record JSON, JSON arrays or JSONL | Author URI, names, grouped employment and education summaries, organization identifiers, role and department, separate uncertain start and end dates. Missing end dates do not establish ongoing employment. |
+| ROR | Native v2 JSON object or array | Display names, aliases, ROR IDs, locations, types, registry status and parent/child relationships. Native v1 objects are not silently interpreted as v2. |
+| USPTO | Bounded grant/application XML, including concatenated document records | Document identifier, filing/publication/grant dates, inventor and assignee source identities, non-patent references. XML entities and external expansion are rejected. |
+| PatCit | Local CSV, JSON or JSONL with an explicit inspected column map | Patent identity, normalized DOI, source row, citation direction and filing/publication/grant date basis. Unmatched NPL stays unresolved. |
+| Public institutional documents | Allowlisted HTTPS capture, HTML, text and PDF transforms | Raw bytes, text transform, character offsets, exact quotations, model revision and prompt hash for AutoGen extraction. Public destinations and each redirect are validated. |
+| Ioannidis discovery cohorts | CSV and bounded XLSX worksheet prefixes | File hash, inspected columns, source row and release label. Names and bibliometric indicators are discovery inputs, not authoritative identity evidence. |
 
-The M1 file cap is 16 MiB decompressed/1,000 records. An exceeded cap fails the batch; it is never silently reported as complete. Every raw line is content-addressed and has a captured timestamp; duplicate versions retain all assertions without multiplying distinct-paper counts. Source status `complete_for_declared_scope` means the supplied file only, never source-wide coverage.
+Native source batches are limited to 1,000 records and 16 MiB decompressed. Generic readers accept `json`, `json-array`, `jsonl`, `csv` or `xml` where applicable. JSON arrays use an incremental parser, but the bounded batch is validated before graph integration. This is not a national snapshot loader. API pagination and Parquet projections remain unavailable.
 
-Scientific field names/signatures are in `src/kdiff/core/schema.py`; the frozen-release contract is in `src/kdiff/analysis/witness.py`. The three relation families parsed in M1 (`authorOf`, `affiliatedWith`, `classifiedAs`), identities, and attribute observations are grounded in captured record paths. Citation/reference parsing is not implemented yet.
+The adapter tests use synthetic native-format records and do not establish live API access or original snapshot coverage. The only existing real-data input exercised locally in this session was a two-row discovery prefix from the local workbook labeled August 2024. That label was not independently authenticated, and it is not the August 2025 cohort described in the qualifying report. No national pipeline was run.
 
-Primary technical documentation inspected for implementation: [AutoGen model clients](https://microsoft.github.io/autogen/stable/user-guide/agentchat-user-guide/tutorial/models.html), [AssistantAgent API](https://microsoft.github.io/autogen/stable/reference/python/autogen_agentchat.agents.html), [Neo4j file locations](https://neo4j.com/docs/operations-manual/current/configuration/file-locations/). Installed-source inspection and actual tests, rather than documentation alone, establish the M1 compatibility claims. Live OpenAI/vLLM use remains untested.
+## PatCit mapping
+
+Inspect the selected release's actual header first. Supply a mapping from these semantic keys to actual column names:
+
+```json
+{
+  "record_id": "ACTUAL_ROW_IDENTIFIER_COLUMN",
+  "patent_id": "ACTUAL_PATENT_IDENTIFIER_COLUMN",
+  "doi": "ACTUAL_MATCHED_DOI_COLUMN",
+  "date": "ACTUAL_CITATION_DATE_COLUMN",
+  "date_basis": "ACTUAL_DATE_BASIS_COLUMN"
+}
+```
+
+Values in the date-basis column must be `filing`, `publication` or `grant`. The patent identifier must match the observed USPTO country-number-kind identifier for an exact join. The relation is `Paper -> citedByPatent -> Patent`. `citesPatent` is a different relation for a paper citing a patent. No invented PatCit API or unverified release column names are built in.
+
+## Identity and conflicts
+
+Exact DOI, ORCID, ROR and patent identifiers can link new source observations to one existing canonical entity. Conflicting identifiers or multiple established candidate identities are retained as conflicts. Names alone never merge records. Every resolution decision is stored separately, and original raw records remain available.
+
+Embedding-based candidate search, reviewed model adjudication and reversible administrative merge/split operations remain unfinished. `reconcile` creates a nondestructive view of alternative dates. Its flags request review and are not proof that sequential appointments contradict one another.
+
+## Public source restrictions
+
+Use explicit permitted institutional hosts and respect robots and access restrictions. The fetcher rejects private, loopback, link-local and multicast addresses, unapproved redirects, embedded credentials and common token-bearing query parameters. TLS connects to the validated address with the original hostname. Request count, bytes, pacing and elapsed time are bounded.
+
+Web extraction uses exact source spans. These protect provenance and prevent invented quotations. They do not alone prove the semantic entailment of every model-selected relation. Review live extraction quality independently before using it for substantive conclusions. No document can introduce a new tool or grant permission to execute commands.
+
+Optional demographic fields remain nullable and disabled for inference. Grant evidence is accepted only through explicit observed records and the registered relation contract. No universal grant feed or inferred award history is assumed.
+
+## Primary references checked
+
+Implementation was checked against [ROR v2 fields](https://ror.readme.io/v2/docs/fields), [ORCID affiliation structures](https://github.com/ORCID/ORCID-Source/blob/main/orcid-api-web/tutorial/affiliations.md), [PatCit's repository](https://github.com/cverluise/PatCit), [AutoGen client protocols](https://microsoft.github.io/autogen/stable/reference/python/autogen_core.models.html), [vLLM tool calling](https://docs.vllm.ai/en/latest/features/tool_calling/) and [OpenAI structured outputs](https://developers.openai.com/api/docs/guides/structured-outputs). Live compatibility must still be established by the explicit provider checks for the selected runtime.

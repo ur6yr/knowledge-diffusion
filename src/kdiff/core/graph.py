@@ -2,10 +2,12 @@
 
 import json
 import os
+import socket
+import time
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from neo4j import GraphDatabase, Query
+from neo4j import GraphDatabase, Query, unit_of_work
 
 from kdiff.construction.openalex import validate_batch
 from .contracts import Batch, canonical, digest
@@ -14,7 +16,7 @@ from .schema import EntityType, RELATIONS
 MAX_EXPORT = 20_000
 
 
-def load_service(path: Path) -> dict:
+def load_service(path: Path, *, starting=False) -> dict:
     meta = json.loads(path.read_text())
     uri = urlsplit(meta["uri"])
     # M1 deliberately cannot be pointed at the known active/default services.
@@ -22,6 +24,12 @@ def load_service(path: Path) -> dict:
         raise ValueError("M1 requires an isolated loopback development service")
     if not meta.get("owner_id") or meta.get("purpose") != "kdiff-m1-development":
         raise ValueError("Missing owned development service manifest")
+    if meta.get('hostname') != socket.gethostname():
+        raise ValueError('Loopback service belongs to another host')
+    if not meta.get('generation') or meta.get('expires_at', 0) <= time.time():
+        raise ValueError('Expired service generation')
+    if meta.get('status') not in ({'starting', 'ready'} if starting else {'ready'}):
+        raise ValueError('Service is not ready')
     root = Path(meta["root"]).resolve()
     if path.resolve() != root / "service.json":
         raise ValueError("Service manifest does not belong to its root")
@@ -32,8 +40,10 @@ def load_service(path: Path) -> dict:
 
 
 class Graph:
-    def __init__(self, service: Path):
-        self.meta = load_service(service)
+    def __init__(self, service: Path, *, starting=False):
+        self.meta = load_service(service, starting=starting)
+        self.service_path = service
+        self.starting = starting
         secret = (Path(self.meta["root"]) / "password").read_text().strip()
         self.driver = GraphDatabase.driver(self.meta["uri"], auth=("neo4j", secret),
                                           connection_timeout=5, max_transaction_retry_time=5,
@@ -47,6 +57,9 @@ class Graph:
             return [r.data() for r in s.run(Query(cypher, timeout=30), **params)]
 
     def verify_owner(self):
+        current = load_service(self.service_path, starting=self.starting)
+        if current['generation'] != self.meta['generation']:
+            raise ValueError('Service generation changed')
         rows = self.read("MATCH (n:KDStore) RETURN n.owner_id AS owner")
         if rows != [{"owner": self.meta["owner_id"]}]:
             raise ValueError("Database ownership mismatch; refusing access")
@@ -69,7 +82,11 @@ class Graph:
         if self.read("MATCH (b:KDBatch {batch_id: $id}) RETURN b.batch_id AS id", id=batch_id):
             return {"batch_id": batch_id, "reused": True, "counts": self.counts()}
 
+        @unit_of_work(timeout=30)
         def write(tx):
+            self._coordinate(tx)
+            if tx.run('MATCH (b:KDBatch {batch_id:$id}) RETURN b.batch_id AS id', id=batch_id).single():
+                return True
             for e in body["entities"]:
                 if e["kind"] not in {x.value for x in EntityType}:
                     raise ValueError("Unregistered label")
@@ -98,22 +115,77 @@ class Graph:
                    id=batch_id, namespace=batch.namespace,
                    payload=canonical({"batch_id": batch_id, "namespace": batch.namespace,
                                       "source_hashes": sorted(s["sha256"] for s in body["sources"])}).decode()).consume()
+            return False
         with self.driver.session(database="neo4j") as s:
-            s.execute_write(write)
-        return {"batch_id": batch_id, "reused": False, "counts": self.counts()}
+            reused = s.execute_write(write)
+        return {"batch_id": batch_id, "reused": reused, "counts": self.counts()}
+
+    def _coordinate(self, tx):
+        # Writers and exports acquire the same server-side lock. This also waits
+        # for an in-flight commit after a killed client releases its file lock.
+        row = tx.run('MATCH (s:KDStore {owner_id:$owner}) '
+            'SET s.coordination_epoch=coalesce(s.coordination_epoch,0)+1 '
+            'RETURN s.owner_id AS owner', owner=self.meta['owner_id']).single()
+        if row is None:
+            raise ValueError('Database ownership changed during transaction')
 
     def counts(self):
         return {"entities": self.read("MATCH (n:KDEntity) RETURN count(n) AS n")[0]["n"],
                 "assertions": self.read("MATCH ()-[r]->() WHERE r.assertion_id IS NOT NULL RETURN count(r) AS n")[0]["n"]}
 
+    def restore_empty(self, release):
+        """Restore a verified logical release only into a freshly initialized store.
+
+        The launcher publishes readiness only after records and batch receipts
+        are restored and their original logical hash has been verified.
+        """
+        self.verify_owner()
+        if self.read('MATCH (n) WHERE NOT n:KDStore RETURN count(n) AS n')[0]['n']:
+            raise ValueError('Logical restore requires an empty owned database')
+        exported = release['graph']
+        if digest(exported) != release['graph_hash']:
+            raise ValueError('Restore graph hash mismatch')
+        batch = Batch.model_validate({'namespace': release['namespace'],
+                                     **{k: v for k, v in exported.items() if k != 'batches'}})
+        validate_batch(batch)
+        # This method is only called before publishing readiness. A failed
+        # restore is never exposed as a ready service or reused as an empty one.
+        self.integrate(batch)
+        with self.driver.session(database='neo4j') as session:
+            @unit_of_work(timeout=30)
+            def catalog(tx):
+                self._coordinate(tx)
+                tx.run('MATCH (b:KDBatch) DELETE b').consume()
+                tx.run('UNWIND $rows AS row CREATE (:KDBatch {batch_id:row.id, namespace:$namespace, payload:row.payload})',
+                       rows=[{'id': b['batch_id'], 'payload': canonical(b).decode()} for b in exported['batches']],
+                       namespace=release['namespace']).consume()
+            session.execute_write(catalog)
+        if digest(self.export(release['namespace'])) != release['graph_hash']:
+            raise ValueError('Restored graph does not match the frozen release')
+        return {'status': 'restored', 'graph_hash': release['graph_hash'], 'counts': self.counts()}
+
+    def has_namespace(self, namespace):
+        self.verify_owner()
+        return bool(self.read('MATCH (b:KDBatch {namespace:$namespace}) RETURN b.batch_id AS id LIMIT 1', namespace=namespace))
+
     def export(self, namespace):
         self.verify_owner()
+        with self.driver.session(database='neo4j') as session:
+            @unit_of_work(timeout=30)
+            def snapshot(tx):
+                self._coordinate(tx)
+                def read(query, **params):
+                    return [row.data() for row in tx.run(query, **params)]
+                return self._export(namespace, read)
+            return session.execute_write(snapshot)
+
+    def _export(self, namespace, read):
         output = {}
         for key, label, id_key in [("entities", "KDEntity", "canonical_id"),
                                    ("observations", "KDObservation", "observation_id"),
                                    ("identities", "KDIdentity", "mapping_id"),
                                    ("sources", "KDSource", "sha256"), ("batches", "KDBatch", "batch_id")]:
-            rows = self.read(f"MATCH (n:{label} {{namespace: $namespace}}) RETURN n.payload AS payload, properties(n) AS props, labels(n) AS labels "
+            rows = read(f"MATCH (n:{label} {{namespace: $namespace}}) RETURN n.payload AS payload, properties(n) AS props, labels(n) AS labels "
                              f"ORDER BY n.{id_key} LIMIT $limit", namespace=namespace, limit=MAX_EXPORT + 1)
             if len(rows) > MAX_EXPORT:
                 raise ValueError("Export limit exceeded; snapshot not created")
@@ -126,7 +198,7 @@ class Graph:
                 if key == "entities" and value["kind"] not in row["labels"]:
                     raise ValueError("Graph entity type and stored record disagree")
                 output[key].append(value)
-        rows = self.read("MATCH (h)-[r]->(t) WHERE r.namespace=$namespace AND r.assertion_id IS NOT NULL "
+        rows = read("MATCH (h)-[r]->(t) WHERE r.namespace=$namespace AND r.assertion_id IS NOT NULL "
                          "RETURN r.payload AS payload, properties(r) AS props, type(r) AS relation, "
                          "h.canonical_id AS head, t.canonical_id AS tail ORDER BY r.assertion_id LIMIT $limit",
                          namespace=namespace, limit=MAX_EXPORT + 1)

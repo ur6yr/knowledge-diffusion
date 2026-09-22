@@ -1,5 +1,15 @@
 {
   "profile": "openai",
   "model": "REPLACE_WITH_AUTHORIZED_MODEL",
-  "capability_report": null
+  "execution_authorized": false,
+  "max_model_calls": 16,
+  "max_total_tokens": 100000,
+  "max_output_tokens": 1024,
+  "context_window": 16384,
+  "timeout_seconds": 60,
+  "max_cost_usd": "0",
+  "input_usd_per_million": null,
+  "output_usd_per_million": null,
+  "price_date": null,
+  "capability_report": "artifacts/openai-capabilities.json"
 }

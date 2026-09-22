@@ -37,3 +37,10 @@ truststore==0.10.4
 typing-inspection==0.4.4
 typing_extensions==4.16.0
 urllib3==2.8.0
+defusedxml==0.7.1
+openpyxl==3.1.5
+et_xmlfile==2.0.0
+ijson==3.5.1
+psycopg==3.3.6
+psycopg-binary==3.3.6
+redis==8.1.0

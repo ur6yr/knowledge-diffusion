@@ -1,7 +1,20 @@
 {
   "profile": "local-dev",
-  "model": "REPLACE_WITH_VERIFIED_CHECKPOINT",
+  "model": "REPLACE_WITH_SERVED_MODEL_NAME",
   "base_url": "http://127.0.0.1:18000/v1",
-  "model_info": null,
-  "capability_report": null
+  "model_info": {
+    "vision": false,
+    "function_calling": true,
+    "json_output": true,
+    "structured_output": true,
+    "family": "unknown"
+  },
+  "execution_authorized": false,
+  "runtime_revision": null,
+  "capability_report": "artifacts/local-capabilities.json",
+  "max_model_calls": 16,
+  "max_total_tokens": 100000,
+  "max_output_tokens": 1024,
+  "context_window": 16384,
+  "timeout_seconds": 60
 }
