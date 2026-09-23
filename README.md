@@ -186,6 +186,18 @@ The application lock was installed and tested on macOS arm64 with Python 3.13.13
 
 Reuse verified Linux Neo4j and Java binaries. The launcher creates its own configuration and database directory. It never uses an existing database store.
 
+For `neo4j-community-2026.02.2-unix.tar.gz`, Neo4j publishes the checksum in a [separate SHA-256 file](https://dist.neo4j.org/neo4j-community-2026.02.2-unix.tar.gz.sha256). The value below was checked against that official file on 23 September 2026. From the directory containing your downloaded tarball, run:
+
+```bash
+printf '%s  %s\n' \
+  '4e95626e21348a30109799a44639c2169bc24e27e1a1371972ff2583c3d8493c' \
+  'neo4j-community-2026.02.2-unix.tar.gz' | sha256sum --check -
+```
+
+A match prints `neo4j-community-2026.02.2-unix.tar.gz: OK`. If verification fails, do not unpack the archive. After a successful check, unpack it into a new user-owned directory and set `KDIFF_NEO4J_HOME` to the extracted `neo4j-community-2026.02.2` directory. Keep `KDIFF_JAVA_HOME` pointed at your verified Java 21 installation, including one provided by the Rivanna module system.
+
+Check the resulting paths before running the pilot:
+
 ```bash
 test -x "$KDIFF_NEO4J_HOME/bin/neo4j"
 test -x "$KDIFF_NEO4J_HOME/bin/neo4j-admin"
@@ -193,7 +205,7 @@ test -x "$KDIFF_NEO4J_HOME/bin/neo4j-admin"
 mkdir -p "$KDIFF_WORK" "$KDIFF_ARCHIVE"
 ```
 
-If binaries are unavailable, obtain the chosen release and Linux JDK through your approved software source, verify their published checksums and unpack them into new user-owned directories. Follow the binary requirements in the [Neo4j Linux tarball documentation](https://neo4j.com/docs/operations-manual/current/installation/linux/tarball/). This project uses no root installation, system service or Docker daemon.
+If binaries are unavailable, obtain them through your approved software source. Follow the binary requirements in the [Neo4j Linux tarball documentation](https://neo4j.com/docs/operations-manual/current/installation/linux/tarball/). This project uses no root installation, system service or Docker daemon.
 
 For PostgreSQL and Redis mode, also set paths to existing verified user-space executables. Their local server integration has not been executed in the development environment.
 
