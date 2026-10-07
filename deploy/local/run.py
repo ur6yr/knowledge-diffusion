@@ -66,7 +66,8 @@ def main():
         "server.memory.pagecache.size": "128m",
     }
     (root / "conf/neo4j.conf").write_text("".join(f"{k}={v}\n" for k, v in conf.items()))
-    secret = secrets.token_urlsafe(30)
+    # A URL-safe token may start with '-', which neo4j-admin parses as an option.
+    secret = 'kdiff-' + secrets.token_urlsafe(30)
     fd = os.open(root / "password", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w") as f:
         f.write(secret)
@@ -169,8 +170,8 @@ def main():
         log.close()
         manifest["status"] = "stopped"
         atomic_json(service_path, manifest)
-        for signum, handler in previous.items():
-            signal.signal(signum, handler)
+        from kdiff.deployment.processes import restore_signal_handlers
+        restore_signal_handlers(previous)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 # Validation status
 
-This is a reconstructed, bounded research implementation. It is not a reproduction of the original empirical snapshot, benchmark scores or hardware performance. Status was recorded on 22 September 2026.
+This is a reconstructed, bounded research implementation. It is not a reproduction of the original empirical snapshot, benchmark scores or hardware performance. The table records the 22 September 2026 validation. Later deployment updates are recorded below.
 
 | Area | Implemented | Executed locally | Rivanna or live provider |
 |---|---|---|---|
@@ -22,6 +22,14 @@ The full local suite passed **67 tests with 4 explicit skips** against isolated 
 The successful logical restore check preserved graph hash `aed16445ee1bf177d55c8d49c4570db08c104e409059122a23d68ee2a7592637`, eight fixture entities and fifteen assertions. These are synthetic software fixtures.
 
 Extraction caching is an explicit opt-in and defaults off. Its enabled/disabled graph invariance is checked on the ROR fixture. No throughput benefit is claimed.
+
+## Rivanna CPU update, 7 October 2026
+
+The user reports completing the CPU tests on Rivanna with 67 passed and 4 skipped, running the synthetic M1 demo, and submitting the CPU test pilot with `sbatch`. The batch completion state and remote logs have not been inspected here. GPU and OpenAI execution remain unrun. This report establishes user-reported CPU progress, not independently verified completion of the entire Rivanna gate.
+
+Two reported launcher defects were reproduced through injected edge cases locally. Unknown prior signal handlers now restore to `SIG_DFL` in the Neo4j, vLLM and metadata launchers, while known ignored handlers and Python callbacks are preserved. Generated Neo4j passwords have a fixed alphabetic prefix followed by the unchanged random token, so a random leading hyphen cannot become a command option. Existing passwords are not changed.
+
+The post-fix local suite passed **71 tests with 4 live-service/provider skips** against a fresh isolated Neo4j instance while forcing both reported edge cases. Four added subprocess cases verify actual signal delivery after restoring an unknown, default, ignored or callable handler. The launcher returned exit code zero and its service manifest records a completed shutdown. This does not validate GPU or metadata-server startup.
 
 ## Remaining scientific and operational scope
 

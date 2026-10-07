@@ -17,6 +17,7 @@ import time
 from uuid import uuid4
 
 from kdiff.deployment.manifest import atomic_json
+from kdiff.deployment.processes import restore_signal_handlers
 
 
 def secret_file(path, value):
@@ -152,8 +153,7 @@ def main(argv=None):
                         child.wait()
             manifest['status'] = 'stopped'
             atomic_json(root / 'service.json', manifest)
-            for signum, handler in handlers.items():
-                signal.signal(signum, handler)
+            restore_signal_handlers(handlers)
 
 
 if __name__ == '__main__':

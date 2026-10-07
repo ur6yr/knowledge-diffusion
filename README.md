@@ -241,6 +241,8 @@ squeue -u "$USER"
 
 The script requests two cores, 4 GB and 20 minutes when submitted with `sbatch`. It reports a persistent result directory with logs, JUnit results and an environment manifest. The fixture uses explicit scripted model responses and synthetic records. It is a software check, not a research result.
 
+After submitting the pilot, check its final job status, exit code and saved test log. Submission alone does not establish that the batch run passed. Once the tests and demo finish successfully, you can pause here until an inference provider is available. The GPU and OpenAI sections are alternative paths, so choose one for your first live pilot.
+
 ### Run with GPUs and vLLM
 
 Use an existing checkpoint, its verified tool-calling chat template and a separate tested vLLM environment. No model weights or serving image are downloaded automatically. The launcher checks supported command options, visible GPUs, runtime versions and authenticated readiness.
@@ -268,6 +270,8 @@ Set `KDIFF_GPU_REQUEST` to the resource syntax confirmed for your allocation. Fo
 The launcher creates a restricted provider profile and runs completion, tool-call, structured-output and usage checks before construction. Its one-job request and token budgets cover capability checks, construction and analysis together. Model-specific refusal behavior and actual GPU performance still require validation. See [vLLM tool-calling documentation](https://docs.vllm.ai/en/latest/features/tool_calling/).
 
 ### Run with the OpenAI API
+
+An older API key may still work, but confirm with the project owner that it is active, has access to the selected model and is authorized for this run's spending budget. Its age alone does not establish access. Keep the key in the job environment and out of messages, source files and logs. See the official [API key guidance](https://developers.openai.com/api/docs/guides/production-best-practices) and [project permissions](https://developers.openai.com/api/docs/guides/rbac).
 
 Copy the example profile to an ignored runtime directory and edit it. Set the actual authorized model, context limit, `execution_authorized`, a positive total job cost limit, input and output prices per million tokens, and their date. Use an absolute capability-report path. Obtain prices for the selected model from the provider before authorizing the run.
 
